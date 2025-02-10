@@ -13,17 +13,15 @@ provider "google" {
   zone    = "us-central1-c"
 }
 
-resource "google_service_account" "default" {
-  account_id   = "moraesvnc"
-  display_name = "Moraes"
+resource "google_service_account" "app_server_sa" {
+  account_id   = var.ssh_user
+  display_name = var.ssh_user
 }
 
-
-
-resource "google_compute_instance" "default" {
+resource "google_compute_instance" "app_server" {
   name         = "iac-alura"
-  machine_type = "e2-micro"
-  zone         = "us-central1-a"
+  machine_type = var.machine_type
+  zone         = var.zone
 
 
   tags = ["http-server"]
@@ -52,23 +50,26 @@ resource "google_compute_instance" "default" {
   # metadata_startup_script = "sudo apt-get -y install apache2 php7.0 | echo '<!doctype html><html><body><h1>Hello World!</h1></body></html>' | sudo tee /var/www/html/index.html"
 
   service_account {
-    email  = google_service_account.default.email
+    email  = google_service_account.app_server_sa.email
     scopes = ["cloud-platform"]
   }
 }
 
-resource "google_compute_firewall" "default" {
-  name    = "test-firewall"
+resource "google_compute_firewall" "app_server_firewall" {
+  name    = "app-server-firewall"
   network = "default"
-
-
 
   allow {
     protocol = "tcp"
-    ports    = ["80", "8080", "1000-2000"]
+    ports    = ["80", "8080", "8000"]
   }
 
-  source_tags = ["web"]
+  source_ranges = ["0.0.0.0/0"]
+  target_tags = ["http-server"]
 }
 
 
+output "PUBLIC_IPS" {
+  value = "${join(" ", google_compute_instance.app_server.*.network_interface.0.access_config.0.nat_ip)}"
+  description = "The public IP address of the newly created instance"
+}

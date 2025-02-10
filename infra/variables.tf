@@ -1,6 +1,12 @@
+variable "zone" {
+  type = string
+}
+variable "machine_type" {
+  type = string
+}
 variable "ssh_user" {
   type = string
-  default = "moraesvnc"
+  default = "user-local"
 }
 variable "ssh_pub_key_file" {
   type = string

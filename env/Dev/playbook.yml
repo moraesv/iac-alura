@@ -1,0 +1,38 @@
+- hosts: terraform-ansible
+  tasks:
+    - name: Instalando o python3, virtualenv, git
+      apt:
+        pkg:
+          - python3
+          - virtualenv
+          - git
+        update_cache: yes
+      become: yes
+    - name: Git Clone
+      git:
+        repo: https://github.com/guilhermeonrails/clientes-leo-api.git
+        dest: /tcc
+        version: master
+        force: yes
+      become: yes
+    - name: Instalando dependencias com pip
+      pip:
+        virtualenv: /tcc/venv
+        requirements: /tcc/requirements.txt
+      become: yes
+    - name: Alterando o hosts do settings
+      lineinfile:
+        path: /tcc/setup/settings.py
+        regexp: "ALLOWED_HOSTS"
+        line: 'ALLOWED_HOSTS = ["*"]'
+        backrefs: yes
+      become: yes
+    - name: configurando o banco de dados
+      shell: ". /tcc/venv/bin/activate; python /tcc/manage.py migrate"
+      become: yes
+    - name: carregando os dados iniciais
+      shell: ". /tcc/venv/bin/activate; python /tcc/manage.py loaddata clientes.json"
+      become: yes
+    - name: iniciando o servidor
+      shell: ". /tcc/venv/bin/activate; nohup python /tcc/manage.py runserver 0.0.0.0:8000 &"
+      become: yes
