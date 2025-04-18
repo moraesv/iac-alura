@@ -1,75 +1,118 @@
 terraform {
   required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = "6.8.0"
+    mgc = {
+      source = "magalucloud/mgc"
     }
   }
 }
 
-provider "google" {
-  project = "supple-hangout-448400-m2"
-  region  = "us-central1"
-  zone    = "us-central1-c"
+resource "mgc_ssh_keys" "my_key" {
+  name = var.ssh_user
+  key  = file(var.ssh_pub_key_file)
 }
 
-resource "google_service_account" "app_server_sa" {
-  account_id   = var.ssh_user
-  display_name = var.ssh_user
+provider "mgc" {
+  api_key = var.api_key
+  region  = var.region
 }
 
-resource "google_compute_instance" "app_server" {
-  name         = "iac-alura"
+# Create VPC
+resource "mgc_network_vpcs" "main_vpc" {
+  name = "main-vpc"
+}
+
+# Create subnet pool
+resource "mgc_network_subnetpools" "main_subnetpool" {
+  name        = "main-subnetpool"
+  description = "Main Subnet Pool"
+  type        = "pip"
+  cidr        = "172.5.0.0/16"
+}
+
+# Create subnet
+resource "mgc_network_vpcs_subnets" "primary_subnet" {
+  cidr_block      = "172.5.1.0/24"
+  description     = "Primary Network Subnet"
+  dns_nameservers = ["8.8.8.8", "1.1.1.1"]
+  ip_version      = "IPv4"
+  name            = "primary-subnet"
+  subnetpool_id   = mgc_network_subnetpools.main_subnetpool.id
+  vpc_id          = mgc_network_vpcs.main_vpc.id
+}
+
+# Create security group
+resource "mgc_network_security_groups" "vm_sg" {
+  name        = "vm-security-group"
+  description = "Security group for VM access"
+}
+
+# Add SSH rule to security group
+resource "mgc_network_security_groups_rules" "ssh_rule" {
+  description       = "Allow SSH access"
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  port_range_min    = 22
+  port_range_max    = 22
+  protocol          = "tcp"
+  remote_ip_prefix  = "0.0.0.0/0"
+  security_group_id = mgc_network_security_groups.vm_sg.id
+}
+
+# Add App rule to security group
+resource "mgc_network_security_groups_rules" "app_rule" {
+  description       = "Allow App access"
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  port_range_min    = 8000
+  port_range_max    = 8000
+  protocol          = "tcp"
+  remote_ip_prefix  = "0.0.0.0/0"
+  security_group_id = mgc_network_security_groups.vm_sg.id
+}
+
+# Create network interface
+resource "mgc_network_vpcs_interfaces" "vm_interface" {
+  name   = "vm-interface"
+  vpc_id = mgc_network_vpcs.main_vpc.id
+
+  # Important: Wait for subnet to be created
+  depends_on = [mgc_network_vpcs_subnets.primary_subnet]
+}
+
+# Attach security group to interface
+resource "mgc_network_security_groups_attach" "sg_attachment" {
+  security_group_id = mgc_network_security_groups.vm_sg.id
+  interface_id      = mgc_network_vpcs_interfaces.vm_interface.id
+}
+
+# Create public IP
+resource "mgc_network_public_ips" "vm_public_ip" {
+  description = "VM public IP"
+  vpc_id      = mgc_network_vpcs.main_vpc.id
+}
+
+# Attach public IP to interface
+resource "mgc_network_public_ips_attach" "ip_attachment" {
+  public_ip_id = mgc_network_public_ips.vm_public_ip.id
+  interface_id = mgc_network_vpcs_interfaces.vm_interface.id
+}
+
+# Create VM
+resource "mgc_virtual_machine_instances" "custom_vm" {
+  name         = "custom-vm"
   machine_type = var.machine_type
-  zone         = var.zone
-
-
-  tags = ["http-server"]
-
-  boot_disk {
-    initialize_params {
-      image = "projects/debian-cloud/global/images/debian-12-bookworm-v20250113"
-      labels = {
-        my_label = "iac-alura-disk"
-      }
-    }
-  }
-
-  network_interface {
-    network = "default"
-
-    access_config {
-      network_tier = "PREMIUM"
-    }
-  }
-
-  metadata = {
-    ssh-keys = "${var.ssh_user}:${file(var.ssh_pub_key_file)}"
-  }
-
-  # metadata_startup_script = "sudo apt-get -y install apache2 php7.0 | echo '<!doctype html><html><body><h1>Hello World!</h1></body></html>' | sudo tee /var/www/html/index.html"
-
-  service_account {
-    email  = google_service_account.app_server_sa.email
-    scopes = ["cloud-platform"]
-  }
+  image        = var.image
+  ssh_key_name = mgc_ssh_keys.my_key.name
 }
 
-resource "google_compute_firewall" "app_server_firewall" {
-  name    = "app-server-firewall"
-  network = "default"
-
-  allow {
-    protocol = "tcp"
-    ports    = ["80", "8080", "8000"]
-  }
-
-  source_ranges = ["0.0.0.0/0"]
-  target_tags = ["http-server"]
+# Attach interface to VM
+resource "mgc_virtual_machine_interface_attach" "interface_attachment" {
+  instance_id  = mgc_virtual_machine_instances.custom_vm.id
+  interface_id = mgc_network_vpcs_interfaces.vm_interface.id
 }
 
-
-output "PUBLIC_IPS" {
-  value = "${join(" ", google_compute_instance.app_server.*.network_interface.0.access_config.0.nat_ip)}"
-  description = "The public IP address of the newly created instance"
+# Output the public IP
+output "vm_public_ip" {
+  value = mgc_network_public_ips.vm_public_ip.public_ip
 }
+
